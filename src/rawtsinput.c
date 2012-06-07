@@ -257,8 +257,6 @@ process_ts_packet(rawts_t *rt, uint8_t *tsb)
 	  struct timespec slp;
 	  int64_t delta = pcr - t->s_pcr_last;
 
-	  
-
 	  if(delta > 90000)
 	    delta = 90000;
 	  delta *= 11;

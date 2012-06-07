@@ -34,6 +34,7 @@
 #include "http.h"
 #include "webui.h"
 #include "dvr/dvr.h"
+#include "dvr/mkts.h"
 #include "dvr/mkmux.h"
 #include "filebundle.h"
 #include "psi.h"
@@ -131,10 +132,13 @@ static void
 http_stream_run(http_connection_t *hc, streaming_queue_t *sq, th_subscription_t *s)
 {
   streaming_message_t *sm;
-  int run = 1;
   mk_mux_t *mkm = NULL;
-  uint32_t event_id = 0;
+  struct mk_ts_pat_pmt pat_pmt_buf;
+  uint32_t ts_packets_cnt = 1000;
+  uint8_t pat_pmt_packets_cnt = 0;
+  int run = 1;
   int timeouts = 0;
+  uint32_t event_id = 0;
 
   if (s->ths_flags & SUBSCRIPTION_RAW_MPEGTS)
     http_output_content(hc, "video/mp2t");
@@ -177,6 +181,7 @@ http_stream_run(http_connection_t *hc, streaming_queue_t *sq, th_subscription_t 
     timeouts = 0; //Reset timeout counter
 
     switch(sm->sm_type) {
+
     case SMT_PACKET: {
       if(!mkm)
         break;
@@ -196,42 +201,14 @@ http_stream_run(http_connection_t *hc, streaming_queue_t *sq, th_subscription_t 
     }
 
     case SMT_START:
-
       tvhlog(LOG_DEBUG, "webui",  "Start streaming %s", hc->hc_url_orig);
-
       if (s->ths_flags & SUBSCRIPTION_RAW_MPEGTS) {
-
         struct streaming_start *ss = sm->sm_data;
-        uint8_t pat_ts[188];
-        uint8_t pmt_ts[188];  
-        int pcrpid = ss->ss_pcr_pid;
-        int pmtpid = 0x0fff;
-
-        //Send PAT
-        memset(pat_ts, 0xff, 188);
-        psi_build_pat(NULL, pat_ts+5, 183, pmtpid);
-        pat_ts[0] = 0x47;
-        pat_ts[1] = 0x40;
-        pat_ts[2] = 0x00;
-        pat_ts[3] = 0x10;
-        pat_ts[4] = 0x00;
-        run = (write(hc->hc_fd, pat_ts, 188) == 188);
-
+        run = mk_ts_build_pat_pmt(&pat_pmt_buf, ss, s->ths_service->s_pmt_pid, s->ths_service->s_pcr_pid);
         if(!run)
           break;
 
-        //Send PMT
-        memset(pmt_ts, 0xff, 188);
-        psi_build_pmt(ss, pmt_ts+5, 183, pcrpid);
-        pmt_ts[0] = 0x47;
-        pmt_ts[1] = 0x40 | (pmtpid >> 8);
-        pmt_ts[2] = pmtpid;
-        pmt_ts[3] = 0x10;
-        pmt_ts[4] = 0x00;
-        run = (write(hc->hc_fd, pmt_ts, 188) == 188);
-
       } else {
-
         if(mkm)
           break;
 
@@ -241,7 +218,6 @@ http_stream_run(http_connection_t *hc, streaming_queue_t *sq, th_subscription_t 
           http_output_content(hc, "video/x-matroska");
 
         mkm = mk_mux_stream_create(hc->hc_fd, sm->sm_data, s->ths_channel);
-
       }
       break;
 
@@ -261,6 +237,22 @@ http_stream_run(http_connection_t *hc, streaming_queue_t *sq, th_subscription_t 
       if (s->ths_flags & SUBSCRIPTION_RAW_MPEGTS) {
         streaming_tsbuf_t *tsbuf = sm->sm_data;
         uint32_t size = tsbuf->ts_cnt * 188;
+
+        if (ts_packets_cnt >= 1000) {
+          ts_packets_cnt = 0;
+
+          pat_pmt_buf.pat_ts[3] = (pat_pmt_buf.pat_ts[3] & 0xf0) | (pat_pmt_packets_cnt & 0x0f);
+          pat_pmt_buf.pmt_ts[3] = (pat_pmt_buf.pmt_ts[3] & 0xf0) | (pat_pmt_packets_cnt & 0x0f);
+          pat_pmt_packets_cnt++;
+
+          run = write(hc->hc_fd, pat_pmt_buf.pat_ts, 188) == 188;
+          run = write(hc->hc_fd, pat_pmt_buf.pmt_ts, 188) == 188;
+        }
+        ts_packets_cnt += tsbuf->ts_cnt;
+
+        if(!run)
+          break;
+
         run = (write(hc->hc_fd, tsbuf->ts_data, size) == size);
       }
       break;

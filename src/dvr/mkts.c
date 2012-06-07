@@ -42,12 +42,11 @@ struct mk_ts {
  */
 mk_ts_t *
 mk_ts_create(const char *filename,
-		  const struct streaming_start *ss,
-	      const struct dvr_entry *de)
+             const struct streaming_start *ss,
+             const struct dvr_entry *de)
 {
   mk_ts_t *mkr;
   int fd;
-  dvr_config_t *cfg = dvr_config_find_by_name_default(de->de_config_name);
 
   fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0777);
   if(fd == -1)
@@ -58,44 +57,33 @@ mk_ts_create(const char *filename,
   mkr->fd = fd;
   mkr->title = strdup(de->de_title);
 
-  // XXX Code from webui.c, it doesn't work with HD stream (H264+EAC3) and XBMC
-  if (strcmp(cfg->dvr_format, "mpegts") == 0) {
-        streaming_tsbuf_t tsbuf;
-        struct {
-          uint8_t pat_ts[188];
-          uint8_t pmt_ts[188];
-        } s;
-	int pcrpid = ss->ss_pcr_pid;
-	int pmtpid = 0x0fff;
-
-	tsbuf.ts_cnt = 2;
-	tsbuf.ts_data = (uint8_t *)&s;
-
-	//Build PAT
-	memset(s.pat_ts, 0xff, 188);
-	psi_build_pat(NULL, s.pat_ts+5, 183, pmtpid);
-	s.pat_ts[0] = 0x47;
-	s.pat_ts[1] = 0x40;
-	s.pat_ts[2] = 0x00;
-	s.pat_ts[3] = 0x10;
-	s.pat_ts[4] = 0x00;
-
-	//Build PMT
-	memset(s.pmt_ts, 0xff, 188);
-	psi_build_pmt(ss, s.pmt_ts+5, 183, pcrpid);
-	s.pmt_ts[0] = 0x47;
-	s.pmt_ts[1] = 0x40 | (pmtpid >> 8);
-	s.pmt_ts[2] = pmtpid;
-	s.pmt_ts[3] = 0x10;
-	s.pmt_ts[4] = 0x00;
-
-	//Write PAT+PMT
-	mk_ts_write(mkr, &tsbuf);
-	if(mkr->error)
-	  return NULL;
-  }
-
   return mkr;
+}
+
+int mk_ts_build_pat_pmt(struct mk_ts_pat_pmt* buffer, const struct streaming_start* ss, int pmt_pid, int pcr_pid)
+{
+  int pmtpid = 0x0fff; //pmt_pid
+  int pcrpid = pcr_pid;
+  
+  //Build PAT
+  memset(buffer->pat_ts, 0xff, 188);
+  psi_build_pat(NULL, buffer->pat_ts+5, 183, pmtpid);
+  buffer->pat_ts[0] = 0x47;
+  buffer->pat_ts[1] = 0x40;
+  buffer->pat_ts[2] = 0x00;
+  buffer->pat_ts[3] = 0x10;
+  buffer->pat_ts[4] = 0x00;
+  
+  //Build PMT
+  memset(buffer->pmt_ts, 0xff, 188);
+  psi_build_pmt(ss, buffer->pmt_ts+5, 183, pcrpid);
+  buffer->pmt_ts[0] = 0x47;
+  buffer->pmt_ts[1] = 0x40 | (pmtpid >> 8);
+  buffer->pmt_ts[2] = pmtpid;
+  buffer->pmt_ts[3] = 0x10;
+  buffer->pmt_ts[4] = 0x00;
+  
+  return 1;
 }
 
 /**

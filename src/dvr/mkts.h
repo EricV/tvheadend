@@ -18,12 +18,19 @@
 
 typedef struct mk_ts mk_ts_t;
 
+struct mk_ts_pat_pmt {
+  uint8_t pat_ts[188];
+  uint8_t pmt_ts[188];
+};
+
 struct streaming_start;
 struct dvr_entry;
 
 mk_ts_t *mk_ts_create(const char *filename,
-			const struct streaming_start *ss,
-			const struct dvr_entry *de);
+                      const struct streaming_start *ss,
+                      const struct dvr_entry *de);
+
+int mk_ts_build_pat_pmt(struct mk_ts_pat_pmt* buffer, const struct streaming_start* ss, int pmt_pid, int pcr_pid);
 
 void mk_ts_write(mk_ts_t *mkr, const streaming_tsbuf_t *tsbuf);
 

@@ -421,29 +421,34 @@ dvr_thread(void *aux)
   dvr_entry_t *de = aux;
   streaming_queue_t *sq = &de->de_sq;
   streaming_message_t *sm;
+  dvr_config_t *cfg = dvr_config_find_by_name_default(de->de_config_name);
+  streaming_tsbuf_t pat_pmt_tsbuf;
+  struct mk_ts_pat_pmt pat_pmt_buf;
+  uint32_t ts_packets_cnt = 1000;
+  uint8_t pat_pmt_packets_cnt = 0;
   int run = 1;
 
   pthread_mutex_lock(&sq->sq_mutex);
-
   while(run) {
     sm = TAILQ_FIRST(&sq->sq_queue);
     if(sm == NULL) {
       pthread_cond_wait(&sq->sq_cond, &sq->sq_mutex);
       continue;
     }
-    
+
     TAILQ_REMOVE(&sq->sq_queue, sm, sm_link);
 
     pthread_mutex_unlock(&sq->sq_mutex);
 
     switch(sm->sm_type) {
+
     case SMT_PACKET:
       if(dispatch_clock > de->de_start - (60 * de->de_start_extra)) {
-	dvr_rec_set_state(de, DVR_RS_RUNNING, 0);
-	if(de->de_mkmux != NULL) {
-	  mk_mux_write_pkt(de->de_mkmux, sm->sm_data);
-	  sm->sm_data = NULL;
-	}
+      dvr_rec_set_state(de, DVR_RS_RUNNING, 0);
+        if(de->de_mkmux != NULL) {
+          mk_mux_write_pkt(de->de_mkmux, sm->sm_data);
+          sm->sm_data = NULL;
+        }
       }
       break;
 
@@ -452,6 +457,14 @@ dvr_thread(void *aux)
       dvr_rec_set_state(de, DVR_RS_WAIT_PROGRAM_START, 0);
       dvr_rec_start(de, sm->sm_data);
       pthread_mutex_unlock(&global_lock);
+
+      if (strcmp(cfg->dvr_format, "mpegts") == 0) {
+        struct streaming_start *ss = sm->sm_data;
+        run = mk_ts_build_pat_pmt(&pat_pmt_buf, ss, de->de_s->ths_service->s_pmt_pid, de->de_s->ths_service->s_pcr_pid);
+        pat_pmt_tsbuf.ts_data = (uint8_t *)&pat_pmt_buf;
+        pat_pmt_tsbuf.ts_cnt = 2;
+      }
+
       break;
 
     case SMT_STOP:
@@ -523,9 +536,24 @@ dvr_thread(void *aux)
 
     case SMT_MPEGTS:
       if(dispatch_clock > de->de_start - (60 * de->de_start_extra)) {
-    	dvr_rec_set_state(de, DVR_RS_RUNNING, 0);
-    	if(de->de_mkts != NULL)
-    	  mk_ts_write(de->de_mkts, (streaming_tsbuf_t *)sm->sm_data);
+        dvr_rec_set_state(de, DVR_RS_RUNNING, 0);
+
+        if(de->de_mkts != NULL) {
+          streaming_tsbuf_t *tsbuf = sm->sm_data;
+
+          if(ts_packets_cnt >= 1000) {
+            ts_packets_cnt = 0;
+
+            pat_pmt_buf.pat_ts[3] = (pat_pmt_buf.pat_ts[3] & 0xf0) | (pat_pmt_packets_cnt & 0x0f);
+            pat_pmt_buf.pmt_ts[3] = (pat_pmt_buf.pmt_ts[3] & 0xf0) | (pat_pmt_packets_cnt & 0x0f);
+            pat_pmt_packets_cnt++;
+
+            mk_ts_write(de->de_mkts, &pat_pmt_tsbuf);
+          }
+          ts_packets_cnt += tsbuf->ts_cnt;
+
+          mk_ts_write(de->de_mkts, tsbuf);
+        }
       }
       break;
 
