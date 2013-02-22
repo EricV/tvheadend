@@ -161,6 +161,14 @@ dvr_entry_notify(dvr_entry_t *de)
   notify_by_msg("dvrdb", m);
 }
 
+static const char ILLEGAL_CHARS[] = "\"'\\:<>?";
+static int is_illegal(char c)
+{
+  if (c < 32) return 1;
+  if (122 < c && c <= 127) return 1;
+  if (strchr(ILLEGAL_CHARS, c)) return 1;
+  return 0;
+}
 
 /**
  *
@@ -202,16 +210,9 @@ dvr_make_title(char *output, size_t outlen, dvr_entry_t *de)
   }
 
   if(cfg->dvr_flags & DVR_CLEAN_TITLE) {
-        for (i=0;i<strlen(output);i++) {
-                if (
-                        output[i]<32 ||
-                        output[i]>122 ||
-                        output[i]==34 ||
-                        output[i]==39 ||
-                        output[i]==92 ||
-                        output[i]==58
-                        ) output[i]='_';
-        }
+    for (i=0;i<strlen(output);i++) {
+      if (is_illegal(output[i])) output[i]='_';
+    }
   }
 }
 
