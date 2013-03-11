@@ -285,6 +285,7 @@ dvb_fe_stop(th_dvb_mux_instance_t *tdmi, int retune)
     dvb_mux_save(tdmi);
   }
 
+  dvb_adapter_stop_dvr(tda);
   dvb_table_flush_all(tdmi);
 
   assert(tdmi->tdmi_scan_queue == NULL);
@@ -433,8 +434,7 @@ dvb_fe_tune(th_dvb_mux_instance_t *tdmi, const char *reason)
 
   if(tda->tda_mux_current != NULL)
     dvb_fe_stop(tda->tda_mux_current, 1);
-  else
-    dvb_adapter_start(tda);
+  dvb_adapter_start(tda);
       
   if(tda->tda_type == FE_QPSK) {
 	
