@@ -44,14 +44,6 @@
 #include "cwc.h"
 #include "tvhtime.h"
 
-#if TDT_TRACE
-#define TRACE(_pre, _fmt, ...)\
-tvhlog(LOG_DEBUG, "tdt-"_pre, _fmt, __VA_ARGS__)
-#else
-#define TRACE(_pre, _fmt, ...) (void)0
-#endif
-
-
 /**
  *
  */
@@ -330,10 +322,11 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
   char provider[256];
   char chname0[256], *chname;
   uint8_t stype;
-#if TDT_TRACE
+#if ENABLE_TRACE
   uint8_t running_status;
 #endif
   int l;
+  uint8_t *dlptr, *dptr;
 
   th_dvb_adapter_t *tda = tdmi->tdmi_adapter;
 
@@ -343,6 +336,11 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 
   tsid         = ptr[0] << 8 | ptr[1];
   onid         = ptr[5] << 8 | ptr[6];
+
+  tvhtrace("sdt", "onid %04X tsid %04X", onid, tsid);
+  tvhlog_hexdump("sdt", ptr, len);
+
+  /* Find Transport Stream */
   if (tableid == 0x42) {
     dvb_mux_set_tsid(tdmi, tsid, 0);
     dvb_mux_set_onid(tdmi, onid, 0);
@@ -355,7 +353,6 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
         break;
     if (!tdmi) return -1;
   }
-  TRACE("sdt", "onid %04X tsid %04X", onid, tsid);
 
   //  version                     = ptr[2] >> 1 & 0x1f;
   //  section_number              = ptr[3];
@@ -370,23 +367,22 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
   len -= 8;
   ptr += 8;
 
-
   while(len >= 5) {
     int save = 0;
     service_id                = ptr[0] << 8 | ptr[1];
     //    reserved                  = ptr[2];
-#if TDT_TRACE
+#if ENABLE_TRACE
     running_status            = (ptr[3] >> 5) & 0x7;
 #endif
     free_ca_mode              = (ptr[3] >> 4) & 0x1;
     dllen                     = ((ptr[3] & 0x0f) << 8) | ptr[4];
-    TRACE("sdt", "  sid %04X running %d free_ca %d",
-          service_id, running_status, free_ca_mode);
+    dlptr                     = ptr + 5;
+    tvhtrace("sdt", "  sid %04X running %d free_ca %d dllen %d",
+             service_id, running_status, free_ca_mode, dllen);
 
-    len -= 5;
-    ptr += 5;
-
-    if(dllen > len)
+    ptr += (5 + dllen);
+    len -= (5 + dllen);
+    if (len < 0)
       break;
 
     stype  = 0;
@@ -394,20 +390,22 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     *crid  = 0;
 
     while(dllen > 2) {
-      dtag = ptr[0];
-      dlen = ptr[1];
+      dtag = dlptr[0];
+      dlen = dlptr[1];
+      dptr = dlptr + 2;
 
-      len -= 2; ptr += 2; dllen -= 2; 
+      dlptr += (2 + dlen); 
+      dllen -= (2 + dlen); 
 
-      if(dlen > len) break;
+      if(dllen < 0) break;
 
       switch(dtag) {
         case DVB_DESC_SERVICE:
-          if(dvb_desc_service(ptr, dlen, &stype,
+          if(dvb_desc_service(dptr, dlen, &stype,
                               provider, sizeof(provider),
                               chname0, sizeof(chname0)) == 0) {
-            TRACE("sdt", "    stype = %d, provider = %s, name = %s",
-                  stype, provider, chname0);
+            tvhtrace("sdt", "    stype = %d, provider = %s, name = %s",
+                     stype, provider, chname0);
             chname = chname0;
             /* Some providers insert spaces.
                Clean up that (both heading and trailing) */
@@ -427,16 +425,11 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
           }
           break;
         case DVB_DESC_DEF_AUTHORITY:
-          dvb_desc_def_authority(ptr, dlen, crid, sizeof(crid));
+          dvb_desc_def_authority(dptr, dlen, crid, sizeof(crid));
           break;
       }
-      len -= dlen; ptr += dlen; dllen -= dlen;
     }
 
-    if (!servicetype_is_tv(stype) &&
-        !servicetype_is_radio(stype))
-      continue;
-          
     if (!(t = dvb_service_find(tdmi, service_id, 0, NULL)))
       continue;
 
@@ -449,17 +442,30 @@ dvb_sdt_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 
     if (chname && (strcmp(t->s_provider ?: "", provider) ||
                    strcmp(t->s_svcname  ?: "", chname))) {
-      free(t->s_provider);
-      t->s_provider = strdup(provider);
+      int save2 = 0;
+      int master = 0;
+      if (t->s_dvb_mux_instance && t->s_dvb_mux_instance->tdmi_network_id &&
+          t->s_dvb_mux_instance->tdmi_network_id == tdmi->tdmi_network_id)
+        master = 1;
+
+      if (!t->s_provider || master) {
+        free(t->s_provider);
+        t->s_provider = strdup(provider);
+        save2 = 1;
+      }
       
-      free(t->s_svcname);
-      t->s_svcname = strdup(chname);
+      if (!t->s_svcname || master) {
+        free(t->s_svcname);
+        t->s_svcname = strdup(chname);
+        save2 = 1;
+      }
 
-      pthread_mutex_lock(&t->s_stream_mutex); 
-      service_make_nicename(t);
-      pthread_mutex_unlock(&t->s_stream_mutex); 
-
-      save = 1;
+      if (save2) {
+        pthread_mutex_lock(&t->s_stream_mutex); 
+        service_make_nicename(t);
+        pthread_mutex_unlock(&t->s_stream_mutex); 
+        save = 1;
+      }
     }
 
     if (*crid && strcmp(t->s_default_authority ?: "", crid)) {
@@ -675,7 +681,7 @@ dvb_table_cable_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     return -1;
 
   dmc.dmc_fe_params.frequency = freq * 100;
-  TRACE("nit", "    dvb-c frequency %d", dmc.dmc_fe_params.frequency);
+  tvhtrace("nit", "    dvb-c frequency %d", dmc.dmc_fe_params.frequency);
 
   symrate =
     bcdtoint(ptr[7]) * 100000 + bcdtoint(ptr[8]) * 1000 + 
@@ -693,7 +699,7 @@ dvb_table_cable_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 
   dvb_mux_create(tdmi->tdmi_adapter, &dmc, onid, tsid, netname,
 		 "automatic mux discovery", 1, 1, NULL, NULL,
-     tdmi->tdmi_adapter->tda_autodiscovery);
+     tdmi->tdmi_adapter->tda_autodiscovery, tdmi);
 
   return 0;
 }
@@ -706,8 +712,10 @@ dvb_table_sat_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 		       uint16_t tsid, uint16_t onid, const char *netname)
 {
   int freq, symrate;
-  //  uint16_t orbital_pos;
   struct dvb_mux_conf dmc;
+#if ENABLE_TRACE
+  uint16_t orbital_pos;
+#endif
 
   if(len < 11)
     return -1;
@@ -719,12 +727,17 @@ dvb_table_sat_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     bcdtoint(ptr[0]) * 1000000 + bcdtoint(ptr[1]) * 10000 + 
     bcdtoint(ptr[2]) * 100     + bcdtoint(ptr[3]);
   dmc.dmc_fe_params.frequency = freq * 10;
-  TRACE("nit", "    dvb-s frequency %d", dmc.dmc_fe_params.frequency);
+  tvhtrace("nit", "    dvb-s frequency %d", dmc.dmc_fe_params.frequency);
 
-  if(!freq)
+  if(!freq) {
+    tvhlog(LOG_ERR, "nit", "invalid frequency (%d)", freq);
     return -1;
+  }
 
-  //  orbital_pos = bcdtoint(ptr[4]) * 100 + bcdtoint(ptr[5]);
+#if ENABLE_TRACE
+  orbital_pos = bcdtoint(ptr[4]) * 100 + bcdtoint(ptr[5]);
+#endif
+  tvhtrace("nit", "    orbital pos %d", orbital_pos);
 
   symrate =
     bcdtoint(ptr[7]) * 100000 + bcdtoint(ptr[8]) * 1000 + 
@@ -771,7 +784,7 @@ dvb_table_sat_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
   }
 
   if (dmc.dmc_fe_delsys == SYS_DVBS && dmc.dmc_fe_rolloff != ROLLOFF_35) {
-    printf ("error descriptor\n");
+    tvhlog(LOG_ERR, "nit", "error descriptor");
     return -1;
   }
 
@@ -779,7 +792,7 @@ dvb_table_sat_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 
   dvb_mux_create(tdmi->tdmi_adapter, &dmc, onid, tsid, netname,
 		 "automatic mux discovery", 1, 1, NULL, tdmi->tdmi_conf.dmc_satconf,
-     tdmi->tdmi_adapter->tda_autodiscovery);
+     tdmi->tdmi_adapter->tda_autodiscovery, tdmi);
   
   return 0;
 }
@@ -807,7 +820,7 @@ dvb_table_terr_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     return -1;
 
   dmc.dmc_fe_params.frequency = freq;
-  TRACE("nit", "    dvb-t frequency %d", dmc.dmc_fe_params.frequency);
+  tvhtrace("nit", "    dvb-t frequency %d", dmc.dmc_fe_params.frequency);
   dmc.dmc_fe_params.u.ofdm.bandwidth = bandwidth_tab[(ptr[4] & 0xe0) >> 5];
   dmc.dmc_fe_params.u.ofdm.constellation=constellation_tab[(ptr[5] & 0xc0) >> 6];
   dmc.dmc_fe_params.u.ofdm.hierarchy_information=hierarchy_info_tab[(ptr[5] & 0x38) >> 3];
@@ -818,7 +831,7 @@ dvb_table_terr_delivery(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
 
   dvb_mux_create(tdmi->tdmi_adapter, &dmc, onid, tsid, netname,
                  "automatic mux discovery", 1, 1, NULL, NULL,
-                 tdmi->tdmi_adapter->tda_autodiscovery);
+                 tdmi->tdmi_adapter->tda_autodiscovery, tdmi);
   
   return 0;
 }
@@ -878,15 +891,16 @@ dvb_nit_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
   uint16_t network_id = (ptr[0] << 8) | ptr[1];
   netname[0] = '\0';
 
-  TRACE("nit", "tableid 0x%02x", tableid);
-#if TDT_TRACE
-  hexdump("nit", ptr, len);
-#endif
+  tvhtrace("nit", "tableid 0x%02x", tableid);
+  tvhlog_hexdump("nit", ptr, len);
 
-  /* Check NID */
-  if(tdmi->tdmi_adapter->tda_nitoid &&
-     tdmi->tdmi_adapter->tda_nitoid != network_id)
-    return -1;
+  /* Specific NID requested */
+  if(tdmi->tdmi_adapter->tda_nitoid) {
+    if (tdmi->tdmi_adapter->tda_nitoid != network_id)
+      return -1;
+  } else if (tableid != 0x40) {
+     return -1;
+  }
 
   /* Ignore non-current */
   if((ptr[2] & 1) == 0)
@@ -903,13 +917,13 @@ dvb_nit_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     dtag = ptr[0];
     dlen = ptr[1];
 
-    TRACE("nit", "dtag %02X dlen %d", dtag, dlen);
+    tvhtrace("nit", "dtag %02X dlen %d", dtag, dlen);
 
     switch(dtag) {
       case DVB_DESC_NETWORK_NAME:
         if(dvb_get_string(netname, sizeof(netname), ptr+2, dlen, NULL, NULL))
           return -1;
-        if(tableid == 0x40 && (!tdmi->tdmi_network || *tdmi->tdmi_network == '\0'))
+        if((tableid == 0x40) && (!tdmi->tdmi_network || *tdmi->tdmi_network == '\0'))
           dvb_mux_set_networkname(tdmi, netname);
         break;
     }
@@ -917,7 +931,7 @@ dvb_nit_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     ptr  += dlen + 2;
     llen -= dlen + 2;
   }
-  TRACE("nit", "network %d/%s", network_id, netname);
+  tvhtrace("nit", "network %d/%s", network_id, netname);
   if (llen)
     return -1;
 
@@ -932,7 +946,7 @@ dvb_nit_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
     onid = ( ptr[2]        << 8) | ptr[3];
     llen = ((ptr[4] & 0xf) << 8) | ptr[5];
 
-    TRACE("nit", "  onid %04X tsid %04X", onid, tsid);
+    tvhtrace("nit", "  onid %04X tsid %04X", onid, tsid);
 
     ptr += 6;
     len -= llen + 6;
@@ -943,7 +957,7 @@ dvb_nit_callback(th_dvb_mux_instance_t *tdmi, uint8_t *ptr, int len,
       dtag = ptr[0];
       dlen = ptr[1];
 
-      TRACE("nit", "    dtag %02X dlen %d", dtag, dlen);
+      tvhtrace("nit", "    dtag %02X dlen %d", dtag, dlen);
 
       switch(dtag) {
         case DVB_DESC_SAT:

@@ -547,7 +547,7 @@ handle_ca0(capmt_t* capmt) {
 #endif
 
       if(ct->ct_keystate != CT_RESOLVED)
-        tvhlog(LOG_INFO, "capmt", "Obtained key for service \"%s\"",t->s_svcname);
+        tvhlog(LOG_DEBUG, "capmt", "Obtained key for service \"%s\"",t->s_svcname);
 
       ct->ct_keystate = CT_RESOLVED;
     }
@@ -620,6 +620,8 @@ capmt_thread(void *aux)
 #if ENABLE_LINUXDVB
         th_dvb_adapter_t *tda;
         TAILQ_FOREACH(tda, &dvb_adapters, tda_global_link) {
+          if (!tda->tda_enabled)
+            continue;
           if (tda->tda_rootpath) {          //if rootpath is NULL then can't rely on tda_adapter_num because it is always 0
             if (tda->tda_adapter_num > MAX_CA) {
               tvhlog(LOG_ERR, "capmt", "adapter number > MAX_CA");
@@ -851,7 +853,7 @@ capmt_table_input(struct th_descrambler *td, struct service *t,
           cce->cce_ecmsize = len;
 
           if(ct->ct_keystate != CT_RESOLVED)
-            tvhlog(LOG_INFO, "capmt",
+            tvhlog(LOG_DEBUG, "capmt",
               "Trying to obtain key for service \"%s\"",t->s_svcname);
 
           buf[9] = pmtversion;
