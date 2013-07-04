@@ -753,16 +753,15 @@ static htsmsg_t *epg_episode_num_serialize ( epg_episode_num_t *num )
   return m;
 }
 
-static epg_episode_num_t *epg_episode_num_deserialize 
+static void epg_episode_num_deserialize 
   ( htsmsg_t *m, epg_episode_num_t *num )
 {
   const char *str;
   uint32_t u32;
-  if (!m) return NULL;
-  if (!num)
-    num = calloc(1, sizeof(epg_episode_num_t));
-  else
-    memset(num, 0, sizeof(epg_episode_num_t));
+  assert(m && num);
+
+  memset(num, 0, sizeof(epg_episode_num_t));
+
   if (!htsmsg_get_u32(m, "e_num", &u32))
     num->e_num = u32;
   if (!htsmsg_get_u32(m, "e_cnt", &u32))
@@ -777,7 +776,6 @@ static epg_episode_num_t *epg_episode_num_deserialize
     num->p_cnt = u32;
   if ((str = htsmsg_get_str(m, "text")))
     num->text = strdup(str);
-  return num;
 }
 
 static void _epg_episode_destroy ( void *eo )
@@ -1396,25 +1394,22 @@ static void _epg_channel_timer_callback ( void *p )
     break;
   }
   
-  /* Change */
-  if (cur != ch->ch_epg_now || nxt != ch->ch_epg_next)
+  /* Change (update HTSP) */
+  if (cur != ch->ch_epg_now || nxt != ch->ch_epg_next) {
     tvhlog(LOG_DEBUG, "epg", "now/next %u/%u set on %s",
            ch->ch_epg_now  ? ch->ch_epg_now->id : 0,
            ch->ch_epg_next ? ch->ch_epg_next->id : 0,
            ch->ch_name);
+    tvhlog(LOG_DEBUG, "epg", "inform HTSP of now event change on %s",
+           ch->ch_name);
+    htsp_channel_update_nownext(ch);
+  }
 
   /* re-arm */
   if ( next ) {
     tvhlog(LOG_DEBUG, "epg", "arm channel timer @ %"PRItime_t" for %s",
            next, ch->ch_name);
     gtimer_arm_abs(&ch->ch_epg_timer, _epg_channel_timer_callback, ch, next);
-  }
-
-  /* Update HTSP */
-  if ( cur != ch->ch_epg_now ) {
-    tvhlog(LOG_DEBUG, "epg", "inform HTSP of now event change on %s",
-           ch->ch_name);
-    htsp_channel_update_current(ch);
   }
 
   /* Remove refs */

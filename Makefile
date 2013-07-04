@@ -114,7 +114,8 @@ SRCS =  src/version.c \
   src/lang_codes.c \
   src/lang_str.c \
   src/imagecache.c \
-  src/tvhtime.c
+  src/tvhtime.c \
+  src/tvhpoll.c
 
 SRCS += src/epggrab/module.c\
   src/epggrab/channel.c\
@@ -189,7 +190,8 @@ SRCS-$(CONFIG_AVAHI) += src/avahi.c
 
 # libav
 SRCS-$(CONFIG_LIBAV) += src/libav.c \
-	src/muxer/muxer_libav.c
+	src/muxer/muxer_libav.c \
+	src/plumbing/transcoding.c \
 
 # CWC
 SRCS-${CONFIG_CWC} += src/cwc.c \

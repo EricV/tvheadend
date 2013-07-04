@@ -21,14 +21,21 @@
 #include "timeshift.h"
 #include "timeshift/private.h"
 #include "atomic.h"
+#include "tvhpoll.h"
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <sys/epoll.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <assert.h>
+
+#if ENABLE_EPOLL
+#include <sys/epoll.h>
+#elif ENABLE_KQUEUE
+#include <sys/event.h>
+#include <sys/time.h>
+#endif
 
 /* **************************************************************************
  * File Reading
@@ -400,7 +407,7 @@ static int _timeshift_flush_to_live
 void *timeshift_reader ( void *p )
 {
   timeshift_t *ts = p;
-  int efd, nfds, end, fd = -1, run = 1, wait = -1;
+  int nfds, end, fd = -1, run = 1, wait = -1;
   timeshift_file_t *cur_file = NULL;
   off_t cur_off = 0;
   int cur_speed = 100, keyframe_mode = 0;
@@ -410,13 +417,13 @@ void *timeshift_reader ( void *p )
   timeshift_index_iframe_t *tsi = NULL;
   streaming_skip_t *skip = NULL;
   time_t last_status = 0;
+  tvhpoll_t *pd;
+  tvhpoll_event_t ev = { 0 };
 
-  /* Poll */
-  struct epoll_event ev = { 0 };
-  efd        = epoll_create(1);
-  ev.events  = EPOLLIN;
-  ev.data.fd = ts->rd_pipe.rd;
-  epoll_ctl(efd, EPOLL_CTL_ADD, ev.data.fd, &ev);
+  pd = tvhpoll_create(1);
+  ev.fd     = ts->rd_pipe.rd;
+  ev.events = TVHPOLL_IN;
+  tvhpoll_add(pd, &ev, 1);
 
   /* Output */
   while (run) {
@@ -428,7 +435,7 @@ void *timeshift_reader ( void *p )
 
     /* Wait for data */
     if(wait)
-      nfds = epoll_wait(efd, &ev, 1, wait);
+      nfds = tvhpoll_wait(pd, &ev, 1, wait);
     else
       nfds = 0;
     wait      = -1;
@@ -439,7 +446,7 @@ void *timeshift_reader ( void *p )
     /* Control */
     pthread_mutex_lock(&ts->state_mutex);
     if (nfds == 1) {
-      if (_read_msg(ev.data.fd, &ctrl) > 0) {
+      if (_read_msg(ts->rd_pipe.rd, &ctrl) > 0) {
 
         /* Exit */
         if (ctrl->sm_type == SMT_EXIT) {
@@ -803,6 +810,7 @@ void *timeshift_reader ( void *p )
   }
 
   /* Cleanup */
+  tvhpoll_destroy(pd);
   if (fd != -1) close(fd);
   if (sm)       streaming_msg_free(sm);
   if (ctrl)     streaming_msg_free(ctrl);

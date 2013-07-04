@@ -108,6 +108,9 @@ stream_clean(elementary_stream_t *st)
   free(st->es_global_data);
   st->es_global_data = NULL;
   st->es_global_data_len = 0;
+
+  free(st->es_section);
+  st->es_section = NULL;
 }
 
 /**
@@ -908,6 +911,7 @@ service_build_stream_start(service_t *t)
     ssc->ssc_type  = st->es_type;
 
     memcpy(ssc->ssc_lang, st->es_lang, 4);
+    ssc->ssc_audio_type = st->es_audio_type;
     ssc->ssc_composition_id = st->es_composition_id;
     ssc->ssc_ancillary_id = st->es_ancillary_id;
     ssc->ssc_pid = st->es_pid;

@@ -184,6 +184,7 @@ int get_device_connection(const char *dev);
  * Stream component types
  */
 typedef enum {
+  SCT_NONE = -1,
   SCT_UNKNOWN = 0,
   SCT_MPEG2VIDEO = 1,
   SCT_MPEG2AUDIO,
@@ -423,7 +424,7 @@ typedef struct sbuf {
 } sbuf_t;
 
 
-
+streaming_component_type_t streaming_component_txt2type(const char *str);
 const char *streaming_component_type2txt(streaming_component_type_t s);
 
 static inline unsigned int tvh_strhash(const char *s, unsigned int mod)
@@ -560,7 +561,11 @@ char *regexp_escape ( const char *str );
 #define PRIulongword_t  "lu"
 #define PRIsize_t       PRIuword_t
 #define PRIssize_t      PRIsword_t
+#if __WORDSIZE == 32 && defined(PLATFORM_FREEBSD)
+#define PRItime_t       PRIsword_t
+#else
 #define PRItime_t       PRIslongword_t
+#endif
 #if _FILE_OFFSET_BITS == 64
 #define PRIoff_t        PRId64
 #else

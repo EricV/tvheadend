@@ -19,6 +19,7 @@
 
 
 #include <sys/types.h>
+#include <sys/uio.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -602,6 +603,10 @@ _mk_build_metadata(const dvr_entry_t *de, const epg_broadcast_t *ebc)
     ls = ee->description;
   else if (ee && ee->summary)
     ls = ee->summary;
+  else if (ebc && ebc->description)
+    ls = ebc->description;
+  else if (ebc && ebc->summary)
+    ls = ebc->summary;
   if (ls) {
     lang_str_ele_t *e;
     RB_FOREACH(e, ls, link)

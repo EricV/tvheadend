@@ -29,7 +29,6 @@
 #include <arpa/inet.h>
 
 #include <sys/stat.h>
-#include <sys/sendfile.h>
 
 #include "tvheadend.h"
 #include "access.h"
@@ -40,12 +39,21 @@
 #include "psi.h"
 #include "plumbing/tsfix.h"
 #include "plumbing/globalheaders.h"
+#include "plumbing/transcoding.h"
 #include "epg.h"
 #include "muxer.h"
 #include "dvb/dvb.h"
 #include "dvb/dvb_support.h"
 #include "imagecache.h"
 #include "tcp.h"
+
+#if defined(PLATFORM_LINUX)
+#include <sys/sendfile.h>
+#elif defined(PLATFORM_FREEBSD)
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#endif
 
 /**
  *
@@ -548,6 +556,47 @@ page_http_playlist(http_connection_t *hc, const char *remain, void *opaque)
 }
 
 
+#if ENABLE_LIBAV
+static int
+http_get_transcoder_properties(struct http_arg_list *args, 
+			       transcoder_props_t *props)
+{
+  int transcode;
+  const char *s;
+
+  memset(props, 0, sizeof(transcoder_props_t));
+
+  if ((s = http_arg_get(args, "transcode")))
+    transcode = atoi(s);
+  else
+    transcode = 0;
+
+  if ((s = http_arg_get(args, "resolution")))
+    props->tp_resolution = atoi(s);
+ 
+  if ((s = http_arg_get(args, "channels")))
+    props->tp_channels = atoi(s);
+ 
+  if ((s = http_arg_get(args, "bandwidth")))
+    props->tp_bandwidth = atoi(s);
+
+  if ((s = http_arg_get(args, "language")))
+    strncpy(props->tp_language, s, 3);
+
+  if ((s = http_arg_get(args, "vcodec")))
+    props->tp_vcodec = streaming_component_txt2type(s);
+
+  if ((s = http_arg_get(args, "acodec")))
+    props->tp_acodec = streaming_component_txt2type(s);
+
+  if ((s = http_arg_get(args, "scodec")))
+    props->tp_scodec = streaming_component_txt2type(s);
+
+  return transcode && transcoding_enabled;
+}
+#endif
+
+
 /**
  * Subscribes to a service and starts the streaming loop
  */
@@ -598,7 +647,7 @@ http_stream_service(http_connection_t *hc, service_t *service)
 				       hc->hc_username,
 				       http_arg_get(&hc->hc_args, "User-Agent"));
   if(s) {
-    name = strdupa(service->s_ch ?
+    name = tvh_strdupa(service->s_ch ?
                    service->s_ch->ch_name : service->s_nicename);
     pthread_mutex_unlock(&global_lock);
     http_stream_run(hc, &sq, name, mc);
@@ -636,7 +685,7 @@ http_stream_tdmi(http_connection_t *hc, th_dvb_mux_instance_t *tdmi)
 					addrbuf,
 					hc->hc_username,
 					http_arg_get(&hc->hc_args, "User-Agent"));
-  name = strdupa(tdmi->tdmi_identifier);
+  name = tvh_strdupa(tdmi->tdmi_identifier);
   pthread_mutex_unlock(&global_lock);
   http_stream_run(hc, &sq, name, MC_RAW);
   pthread_mutex_lock(&global_lock);
@@ -660,6 +709,9 @@ http_stream_channel(http_connection_t *hc, channel_t *ch)
   streaming_target_t *gh;
   streaming_target_t *tsfix;
   streaming_target_t *st;
+#if ENABLE_LIBAV
+  streaming_target_t *tr = NULL;
+#endif
   dvr_config_t *cfg;
   int priority = 100;
   int flags;
@@ -689,6 +741,14 @@ http_stream_channel(http_connection_t *hc, channel_t *ch)
   } else {
     streaming_queue_init2(&sq, 0, qsize);
     gh = globalheaders_create(&sq.sq_st);
+#if ENABLE_LIBAV
+    transcoder_props_t props;
+    if(http_get_transcoder_properties(&hc->hc_req_args, &props)) {
+      tr = transcoder_create(gh);
+      transcoder_set_properties(tr, &props);
+      tsfix = tsfix_create(tr);
+    } else
+#endif
     tsfix = tsfix_create(gh);
     st = tsfix;
     flags = 0;
@@ -701,7 +761,7 @@ http_stream_channel(http_connection_t *hc, channel_t *ch)
                http_arg_get(&hc->hc_args, "User-Agent"));
 
   if(s) {
-    name = strdupa(ch->ch_name);
+    name = tvh_strdupa(ch->ch_name);
     pthread_mutex_unlock(&global_lock);
     http_stream_run(hc, &sq, name, mc);
     pthread_mutex_lock(&global_lock);
@@ -710,6 +770,12 @@ http_stream_channel(http_connection_t *hc, channel_t *ch)
 
   if(gh)
     globalheaders_destroy(gh);
+
+#if ENABLE_LIBAV
+  if(tr)
+    transcoder_destroy(tr);
+#endif
+
   if(tsfix)
     tsfix_destroy(tsfix);
 
@@ -791,7 +857,11 @@ page_dvrfile(http_connection_t *hc, const char *remain, void *opaque)
   char range_buf[255];
   char disposition[256];
   off_t content_len, file_start, file_end, chunk;
+#if defined(PLATFORM_LINUX)
   ssize_t r;
+#elif defined(PLATFORM_FREEBSD)
+  off_t r;
+#endif
   
   if(remain == NULL)
     return 404;
@@ -872,7 +942,11 @@ page_dvrfile(http_connection_t *hc, const char *remain, void *opaque)
   if(!hc->hc_no_output) {
     while(content_len > 0) {
       chunk = MIN(1024 * 1024 * 1024, content_len);
+#if defined(PLATFORM_LINUX)
       r = sendfile(hc->hc_fd, fd, NULL, chunk);
+#elif defined(PLATFORM_FREEBSD)
+      sendfile(fd, hc->hc_fd, 0, chunk, NULL, &r, 0);
+#endif
       if(r == -1) {
   close(fd);
   return -1;

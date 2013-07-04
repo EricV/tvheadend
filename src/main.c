@@ -64,6 +64,7 @@
 #include "timeshift.h"
 #if ENABLE_LIBAV
 #include "libav.h"
+#include "plumbing/transcoding.h"
 #endif
 
 /* Command line option struct */
@@ -125,6 +126,9 @@ const tvh_caps_t tvheadend_capabilities[] = {
 #endif
 #if ENABLE_LINUXDVB
   { "linuxdvb", NULL },
+#endif
+#if ENABLE_LIBAV
+  { "transcoding", &transcoding_enabled },
 #endif
 #if ENABLE_IMAGECACHE
   { "imagecache", &imagecache_enabled },
@@ -556,7 +560,7 @@ main(int argc, char **argv)
     if (*tvheadend_webroot == '/')
       tmp = strdup(tvheadend_webroot);
     else {
-      tmp = malloc(strlen(tvheadend_webroot)+1);
+      tmp = malloc(strlen(tvheadend_webroot)+2);
       *tmp = '/';
       strcpy(tmp+1, tvheadend_webroot);
     }
